@@ -12,13 +12,46 @@
 const defaults=()=>({version:1,title:'杭州周末小旅行',mode:'aa',bills:clone(sourceBills.slice(0,4)),members:[{id:'me',name:'我',self:true,weight:1},{id:'rain',name:'小雨',weight:1},{id:'zhou',name:'阿舟',weight:1}],payments:[{id:'seed-1',member:'rain',amount:15000,time:'2026-11-22T11:30:00.000Z',allocations:{hotel:15000}},{id:'seed-2',member:'zhou',amount:12000,time:'2026-11-22T12:00:00.000Z',allocations:{dinner:12000}}]});
 
  window.BILL_SPLIT_DEMO_SEED=defaults();
+ const books=[
+  {id:'demo-daily',name:'日常账本'},
+  {id:'demo-trip',name:'旅行账本'},
+  {id:'demo-life',name:'生活账本'}
+ ];
+ const examples=[
+  {name:'早餐豆浆和包子',amount:1250,category:'餐饮',type:'food'},
+  {name:'地铁出行',amount:600,category:'交通',type:'car'},
+  {name:'工作日午餐',amount:3200,category:'餐饮',type:'food'},
+  {name:'下午的拿铁',amount:2600,category:'饮品',type:'coffee'},
+  {name:'超市日用品',amount:8750,category:'购物',type:'receipt'},
+  {name:'晚餐小火锅',amount:15800,category:'餐饮',type:'food'},
+  {name:'网约车回家',amount:3480,category:'交通',type:'car'},
+  {name:'便利店水果',amount:2380,category:'购物',type:'receipt'},
+  {name:'周末电影',amount:9800,category:'娱乐',type:'receipt'},
+  {name:'短途高铁',amount:12350,category:'交通',type:'car'},
+  {name:'周末民宿',amount:42800,category:'住宿',type:'home'},
+  {name:'猫咪的零食',amount:4590,category:'宠物',type:'receipt'},
+  {name:'家里的水电费',amount:14680,category:'居家',type:'home'},
+  {name:'面包店采购',amount:3820,category:'餐饮',type:'food'},
+  {name:'书店买书',amount:6800,category:'购物',type:'receipt'},
+  {name:'朋友聚餐',amount:28600,category:'餐饮',type:'food'}
+ ];
+ const demoBills=Array.from({length:200},(_,i)=>{
+  const bill=i<sourceBills.length?sourceBills[sourceBills.length-1-i]:examples[(i-sourceBills.length)%examples.length];
+  const book=books[i%books.length];
+  return {
+   id:'demo-bill-'+String(i+1).padStart(3,'0'),bookId:book.id,bookName:book.name,
+   name:bill.name,amount:bill.amount+(i<sourceBills.length?0:Math.floor(i/examples.length)*137),
+   date:new Date(Date.UTC(2026,10,26)-Math.floor(i/6)*86400000).toISOString().slice(0,10),
+   category:bill.category,icon:bill.type
+  };
+ });
  window.BILL_SPLIT_CONFIG=Object.freeze({...window.BILL_SPLIT_CONFIG,storageKey:'miaomiao-bill-split-demo-v1',demo:true});
  window.callNative={
   evaluateJsToNative(raw){
    const message=JSON.parse(raw);
    if(message.action==='getLocalBills')setTimeout(()=>window.onSuccessCallback(JSON.stringify({
     action:message.action,requestId:message.requestId,data:{
-     items:sourceBills.map((b,i)=>({id:b.id,bookId:i%2?'demo-daily':'demo-trip',bookName:i%2?'日常账本':'旅行账本',name:b.name,amount:b.amount,date:b.date.includes('21')?'2026-11-21':'2026-11-22',category:b.category,icon:b.type})).reverse()
+     items:demoBills
     }
    })),80);
    else if(message.action==='shareImg')setTimeout(()=>window.onSuccessCallback(JSON.stringify({action:message.action,requestId:message.requestId,data:{code:-1000002,msg:'模拟模式不调用系统分享'}})),100);
