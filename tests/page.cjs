@@ -2,6 +2,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const base = process.env.BILL_SPLIT_TEST_URL || 'http://127.0.0.1:8787';
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
@@ -28,13 +29,26 @@ const fs = require('node:fs');
     const errors = [], requests = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => requests.push({ url: request.url(), type: request.resourceType() }));
-    await page.goto('http://127.0.0.1:8787/');
+    await page.goto(base + '/');
     assert.equal(await page.locator('#reset-demo').isVisible(), false);
     assert.equal(await page.locator('#empty-create').count(), 1);
-    await page.locator('#new-group').click();
     await page.locator('[data-select]').first().waitFor();
+    assert.equal(await page.locator('#modal-title').innerText(), '新建分摊');
     assert.equal(await page.locator('[data-select]').count(), 200);
     assert.equal(await page.locator('.bill-select img').count(), 0);
+    for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }, { width: 1280, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      const before = await page.locator('.create-foot').boundingBox();
+      assert.ok(before.y >= 0 && before.y + before.height <= viewport.height);
+      await page.locator('.create-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      const after = await page.locator('.create-foot').boundingBox();
+      assert.ok(Math.abs(before.y - after.y) < 1);
+      assert.equal(await page.locator('#draft-next').isVisible(), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.create-body').evaluate(el => { el.scrollTop = 0; });
+    await page.screenshot({ path: path.join(__dirname, 'create-first-mobile.png'), fullPage: true });
     assert.match(await page.locator('.source-caption').innerText(), /所有账本/);
     assert.match(await page.locator('[data-select="bill:book-a:id-0"]').locator('..').innerText(), /日常账本/);
     assert.match(await page.locator('[data-select="bill:book-b:id-1"]').locator('..').innerText(), /旅行账本/);
@@ -59,6 +73,8 @@ const fs = require('node:fs');
     await page.locator('[data-person="m1"]').click();
     await page.locator('[data-check="bill:book-a:id-0"]').check();
     await page.reload();
+    await page.locator('[data-select]').first().waitFor();
+    await page.locator('#draft-back').click();
     saved = await page.evaluate(() => JSON.parse(localStorage.getItem('miaomiao-bill-split-v1')));
     assert.equal(saved.groups[0].payments.length, 1);
     await page.locator('#export-open').click();
@@ -90,18 +106,24 @@ const fs = require('node:fs');
     assert.deepEqual(errors, []);
     assert.equal(requests.filter(r => ['fetch', 'xhr', 'websocket'].includes(r.type)).length, 0);
     const plain = await browser.newPage();
-    await plain.goto('http://127.0.0.1:8787/');
-    await plain.locator('#new-group').click();
+    await plain.goto(base + '/');
     await plain.locator('#retry-bills').waitFor();
     assert.match(await plain.locator('#modal').innerText(), /客户端/);
-    await plain.goto('http://127.0.0.1:8787/demo/');
+    await plain.goto(base + '/demo/');
+    await plain.locator('[data-select]').first().waitFor();
+    assert.equal(await plain.locator('[data-select]').count(), 200);
+    assert.equal(await plain.getByText('模拟预览', { exact: true }).count(), 0);
+    assert.equal(await plain.locator('#group-title').innerText(), '分摊算账');
+    await plain.locator('#draft-back').click();
     assert.equal(await plain.locator('#reset-demo').isVisible(), true);
     await plain.locator('#reset-demo').click();
-    assert.match(await plain.locator('#group-title').innerText(), /杭州/);
+    await plain.locator('[data-select]').first().waitFor();
+    assert.equal(await plain.locator('[data-select]').count(), 200);
+    assert.equal(await plain.evaluate(() => JSON.parse(localStorage.getItem('miaomiao-bill-split-demo-v1')).groups.length), 0);
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(__dirname, 'result.json'), JSON.stringify({
       pass: true, scope: 'all', selectedBookCount: 2, returnedBills: 200, historyGroups: 2, businessRequests: 0,
-      checked: ['no production mock', 'native local import', 'HTML escaping', '100% validation', 'cent allocation', 'settlement persistence', 'PNG export', 'Android save bridge', 'history', 'demo isolation']
+      checked: ['create on entry', 'pinned footer at 320/390/1280 widths', 'no preview banner', 'no seeded split', '200 demo bills retained', 'HTML escaping', '100% validation', 'settlement persistence', 'PNG export', 'history', 'demo isolation']
     }, null, 2));
     console.log('PASS: 200 bills, percentage split, local persistence/history, image export/native save, isolated demo, no business requests.');
   } finally { await browser.close(); }
