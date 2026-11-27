@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = __dirname;
-let html = fs.readFileSync(path.join(root, 'src/prototype.html'), 'utf8');
+let html = fs.readFileSync(path.join(root, 'src/prototype.html'), 'utf8').replaceAll('\r\n', '\n');
 function replace(before, after) {
   if (!html.includes(before)) throw new Error('Build anchor missing: ' + before.slice(0, 80));
   html = html.replace(before, after);
@@ -9,7 +9,7 @@ function replace(before, after) {
 const seedStart = html.indexOf('const sourceBills=[');
 const seedEnd = html.indexOf("let current='rain'", seedStart);
 if (seedStart < 0 || seedEnd < 0) throw new Error('Seed anchors missing');
-const demoSource = html.slice(seedStart, html.indexOf('let state=defaults();', seedStart));
+const demoSource = html.slice(seedStart, html.indexOf('const defaults=', seedStart));
 html = html.slice(0, seedStart) + `
 const config=window.BILL_SPLIT_CONFIG,bridge=window.BillSplitNative;
 let sourceBills=[],loadingBills=false,loadSerial=0;
@@ -21,9 +21,6 @@ try{
   const saved=JSON.parse(raw);
   if(saved?.schemaVersion!==1||!Array.isArray(saved.groups)||saved.groups.some(g=>!g.id||!Array.isArray(g.bills)||!Array.isArray(g.members)||!g.members.some(m=>m.self)||!Array.isArray(g.payments)))throw Error('数据格式错误');
   book=saved;state=clone(book.groups.find(g=>g.id===book.currentId)||book.groups[0]||defaults());
- }else if(config.demo&&window.BILL_SPLIT_DEMO_SEED){
-  state=clone(window.BILL_SPLIT_DEMO_SEED);state.id='demo-group';
-  book={schemaVersion:1,currentId:state.id,groups:[clone(state)]};
  }
 }catch{storageBlocked=true;storageMessage='本地数据暂时无法读取，请勿清理原数据。';}
 ` + html.slice(seedEnd);
@@ -116,8 +113,8 @@ replace("if(exportMode==='image'){exportCanvas=buildCanvas(exportScope);$('#expo
 replace("$('#reset-demo').onclick=()=>{checkpoint();state=defaults();current='rain';tab='bills';settledOpen=true;persist();render();notify('已恢复模拟数据',true);};", `
 $('#history-open').onclick=openHistory;
 $('#reset-demo').onclick=()=>{
- if(!config.demo)return;checkpoint();state=clone(window.BILL_SPLIT_DEMO_SEED);state.id='demo-group';
- book={schemaVersion:1,currentId:state.id,groups:[clone(state)]};current='rain';tab='bills';settledOpen=true;persist();render();notify('已恢复模拟数据',true);
+ if(!config.demo)return;checkpoint();state=defaults();
+ book={schemaVersion:1,currentId:null,groups:[]};current='all';tab='bills';settledOpen=true;persist();render();notify('已重置模拟数据',true);openCreate();
 };
 bridge.subscribe(message=>{
  if(message.action==='backIntercept'&&modalKind)closeModal();
@@ -147,15 +144,14 @@ replace('</head>', `<style>
 .native-share-targets{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:16px 0}
 @media(max-width:600px){#history-open{font-size:11px;padding:7px 4px}.history-item{flex-direction:column;gap:7px}}
 </style></head>`);
+replace("render();\n})();", "render();\nopenCreate();\n})();");
 const dist = path.join(root, 'dist');
 fs.mkdirSync(dist, { recursive: true });
 for (const file of ['config.js', 'native-bridge.js']) fs.copyFileSync(path.join(root, 'src', file), path.join(dist, file));
 fs.writeFileSync(path.join(dist, 'index.html'), html);
 const mock = `
 (() => {
- const clone=x=>JSON.parse(JSON.stringify(x));
  ${demoSource}
- window.BILL_SPLIT_DEMO_SEED=defaults();
  const books=[
   {id:'demo-daily',name:'日常账本'},
   {id:'demo-trip',name:'旅行账本'},
@@ -201,11 +197,10 @@ const mock = `
    else if(message.action==='shareImg')setTimeout(()=>window.onSuccessCallback(JSON.stringify({action:message.action,requestId:message.requestId,data:{code:-1000002,msg:'模拟模式不调用系统分享'}})),100);
   }
  };
- document.addEventListener('DOMContentLoaded',()=>{const mark=document.createElement('div');mark.className='source-caption';mark.style.cssText='text-align:center;padding:8px';mark.textContent='模拟预览';document.querySelector('.topbar').after(mark);});
 })();
 `;
 fs.writeFileSync(path.join(root, 'dev/demo-bridge.js'), mock);
-const demoHtml = html.replace('<script src="./config.js"></script>', '<script src="../config.js"></script><script src="./demo-bridge.js?v=200"></script>')
+const demoHtml = html.replace('<script src="./config.js"></script>', '<script src="../config.js"></script><script src="./demo-bridge.js?v=create-first"></script>')
   .replace('<script src="./native-bridge.js"></script>', '<script src="../native-bridge.js"></script>');
 fs.writeFileSync(path.join(root, 'dev/index.html'), demoHtml);
 fs.writeFileSync(path.join(root, 'index.html'), demoHtml.replaceAll('../config.js', './config.js').replaceAll('../native-bridge.js', './native-bridge.js'));
