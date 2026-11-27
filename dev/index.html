@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>分摊算账</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<script src="../config.js"></script><script src="./demo-bridge.js?v=200"></script>
+<script src="../config.js"></script><script src="./demo-bridge.js?v=create-first"></script>
 <script src="../native-bridge.js"></script>
 <style>
 :root{--bg:#fffdf7;--paper:#fff;--ink:#352f29;--muted:#91877f;--line:#efdfc7;--green:#bd651e;--soft:#fff4d4;--orange:#ff9e3d;--warm:#fff8e0;--pink:#f56f86;--yellow:#ffda5d;--edge:#e88f47;--shadow:0 6px 0 #ffe9a6}
@@ -147,6 +147,15 @@ a{color:inherit}
 .amount-field input{width:100%;border:0;outline:none!important;font-size:38px;background:none;padding:10px 12px;border-radius:0;color:#d78e36;font-variant-numeric:tabular-nums}
 .modal-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}
 .modal-foot .primary{flex:1}
+.modal.create-modal{display:flex;flex-direction:column;overflow:hidden;padding:0}
+.create-head{flex:none;padding:26px 26px 0}
+.create-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 26px 20px}
+.create-body>.source-caption{margin-top:0}
+.create-foot.modal-foot{display:block;flex:none;margin:0;padding:16px 26px calc(18px + env(safe-area-inset-bottom,0px));background:#fffefa;border-top:1px solid var(--line);box-shadow:0 -6px 16px #72512a08}
+.create-foot-actions{display:flex;gap:10px}
+.create-foot .selected-total{padding:0 0 12px;font-size:13px}
+.create-foot .selected-total b{font-size:20px}
+@media(max-width:600px){.create-head{padding:22px 22px 0}.create-body{padding:0 22px 18px}.create-foot.modal-foot{padding:14px 22px calc(16px + env(safe-area-inset-bottom,0px))}}
 .error{font-size:12px;color:#b65e53;background:#fff0e8;border-radius:9px;padding:10px 12px;margin-top:12px}
 .error:empty{display:none}
 .pill-tabs{display:flex;gap:4px;padding:4px;background:#fff4d6;border-radius:11px}
@@ -291,9 +300,6 @@ try{
   const saved=JSON.parse(raw);
   if(saved?.schemaVersion!==1||!Array.isArray(saved.groups)||saved.groups.some(g=>!g.id||!Array.isArray(g.bills)||!Array.isArray(g.members)||!g.members.some(m=>m.self)||!Array.isArray(g.payments)))throw Error('数据格式错误');
   book=saved;state=clone(book.groups.find(g=>g.id===book.currentId)||book.groups[0]||defaults());
- }else if(config.demo&&window.BILL_SPLIT_DEMO_SEED){
-  state=clone(window.BILL_SPLIT_DEMO_SEED);state.id='demo-group';
-  book={schemaVersion:1,currentId:state.id,groups:[clone(state)]};
  }
 }catch{storageBlocked=true;storageMessage='本地数据暂时无法读取，请勿清理原数据。';}
 let current='rain',tab='bills',modalKind='',paymentDraft=null,createDraft=null,exportMode='image',exportScope='all',lastFocus=null,toastTimer,undoSnapshot=null,exportCanvas=null;
@@ -500,7 +506,9 @@ function renderCreate(){
   const shares=d.members.map((_,i)=>sum(selected.map(b=>allocateCents(b.amount,weights)[i])));
   content=`<p class="modal-sub">${esc(d.title)} · ${selected.length} 笔 · ${d.mode==='aa'?'AA 平分':'百分比分摊 · 合计 100%'}</p><div class="draft-total">${yuan(amount)}</div>`+d.members.map((m,i)=>`<div class="allocation"><span class="avatar">${esc(m.name.slice(-1))}</span><div>${esc(m.name)}${d.mode==='percent'?'<small class="confirmed-percent">'+formatPercent(weights[i])+'</small>':''}</div><span>${yuan(shares[i])}</span></div>`).join('');
  }
- showModal('create',modalHead('新建分摊')+steps+content+`<div class="error" role="alert" id="draft-error"></div><div class="modal-foot"><button class="button outline" id="draft-back">${d.step===1?'取消':'上一步'}</button><button class="button primary" id="draft-next">${d.step===3?'创建分摊单':'下一步 '+icon('arrow')}</button></div>`);
+ showModal('create','<div class="create-head">'+modalHead('新建分摊')+steps+'</div><div class="create-body">'+content+`<div class="error" role="alert" id="draft-error"></div></div><div class="modal-foot create-foot"><div class="create-foot-actions"><button class="button outline" id="draft-back">${d.step===1?'取消':'上一步'}</button><button class="button primary" id="draft-next">${d.step===3?'创建分摊单':'下一步 '+icon('arrow')}</button></div></div>`);
+ $('#modal').classList.add('create-modal');
+ const selectedTotal=$('#modal .selected-total');if(selectedTotal)$('#modal .create-foot').prepend(selectedTotal);
  const capture=()=>{if(d.step!==2)return;d.title=$('#draft-title').value;$('#modal').querySelectorAll('[data-name]').forEach(i=>d.members[+i.dataset.name].name=i.value);$('#modal').querySelectorAll('[data-percent]').forEach(i=>d.members[+i.dataset.percent].percent=i.value);};
  const updatePercent=()=>{
   if(d.step!==2||d.mode!=='percent')return;
@@ -709,8 +717,8 @@ $('#new-group').onclick=openCreate;$('#export-open').onclick=()=>openExport();
 
 $('#history-open').onclick=openHistory;
 $('#reset-demo').onclick=()=>{
- if(!config.demo)return;checkpoint();state=clone(window.BILL_SPLIT_DEMO_SEED);state.id='demo-group';
- book={schemaVersion:1,currentId:state.id,groups:[clone(state)]};current='rain';tab='bills';settledOpen=true;persist();render();notify('已恢复模拟数据',true);
+ if(!config.demo)return;checkpoint();state=defaults();
+ book={schemaVersion:1,currentId:null,groups:[]};current='all';tab='bills';settledOpen=true;persist();render();notify('已重置模拟数据',true);openCreate();
 };
 bridge.subscribe(message=>{
  if(message.action==='backIntercept'&&modalKind)closeModal();
@@ -733,6 +741,7 @@ function showShareTargets(){
 $('#backdrop').onclick=e=>{if(e.target===$('#backdrop'))closeModal();};
 document.addEventListener('keydown',e=>{if(!modalKind)return;if(e.key==='Escape')closeModal();if(e.key==='Tab'){const items=[...$('#modal').querySelectorAll('button:not(:disabled),input:not(:disabled),select,textarea,[tabindex="0"]')].filter(el=>el.getClientRects().length);const first=items[0],last=items.at(-1);if(e.shiftKey&&(document.activeElement===first||document.activeElement===$('#modal'))){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}});
 render();
+openCreate();
 })();
 </script>
 </body>
