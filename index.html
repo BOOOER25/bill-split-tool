@@ -319,7 +319,16 @@ function persist(){
   localStorage.setItem(config.storageKey,JSON.stringify(book));storageMessage='';renderStorageStatus();return true;
  }catch{storageMessage='未保存：本地存储不可用，请保持页面打开。';renderStorageStatus();return false;}
 }
-function allocation(bill){return allocateCents(bill.amount,state.members.map(m=>state.mode==='percent'?m.percentBps:state.mode==='aa'?1:Number(m.weight)));}
+let equalAllocationCache=null;
+function allocation(bill){
+ if(state.rounding==='equal-waive-v1'){
+  const key=JSON.stringify([state.members.length,state.bills.map(b=>[b.id,b.amount])]);
+  if(equalAllocationCache?.key!==key)equalAllocationCache={key,rows:equalAllocations(state.bills,state.members.length)};
+  return equalAllocationCache.rows[state.bills.findIndex(b=>b.id===bill.id)];
+ }
+ return allocateCents(bill.amount,state.members.map(m=>state.mode==='percent'?m.percentBps:state.mode==='aa'?1:Number(m.weight)));
+}
+function waivedTail(){return state.rounding==='equal-waive-v1'?sum(state.bills.map(b=>b.amount))%state.members.length:0;}
 function allBills(){return [...state.bills,...(state.extras||[])];}
 function memberBills(member){return allBills().filter(b=>!b.member||b.member===member);}
 function share(member,bill){return bill.member?(bill.member===member?bill.amount:0):allocation(bill)[state.members.findIndex(m=>m.id===member)];}
@@ -361,8 +370,8 @@ function render(){
  const settled=isAll||isSelf?[]:visibleBills.filter(b=>remaining(current,b)<=0);
  const heroValue=isSelf?sumDue:sumRemain;
  const stats=isSelf?'':`<div class="summary-stats ${isAll?'total-stats':''}"><div><span>${isAll?'账单总额':'分摊总额'}</span><b>${yuan(sumDue)}</b></div><div><span>${isAll?'已收金额':'已付'}</span><b>${yuan(sumPaid)}</b></div>${isAll?`<div><span>我的分摊</span><b>${yuan(due(state.members.find(m=>m.self).id))}</b></div>`:''}</div>`;
- const ledgerInfo=isAll?`<div class="ledger-summary-info"><span>共同消费<b>${state.bills.length} 笔 · ${yuan(sum(state.bills.map(b=>b.amount)))}</b></span><span>个人追加<b>${state.extras?.length||0} 笔 · ${yuan(sum((state.extras||[]).map(b=>b.amount)))}</b></span></div>`:'';
- $('#main').innerHTML=`<section class="summary"><div class="summary-top"><h2>${isAll?'待收总额':isSelf?'我的分摊':esc(member.name)+'待付'}</h2><span>${state.members.length} 人 · ${state.mode==='aa'?'AA':'百分比'}</span></div><div class="hero-money" aria-live="polite"><small>¥</small>${money(heroValue)}</div>${stats}${ledgerInfo}</section>
+ const ledgerInfo=isAll?`<div class="ledger-summary-info"><span>共同消费<b>${state.bills.length} 笔 · ${yuan(sum(state.bills.map(b=>b.amount)))}</b></span><span>个人追加<b>${state.extras?.length||0} 笔 · ${yuan(sum((state.extras||[]).map(b=>b.amount)))}</b></span>${waivedTail()?`<span>尾差减免<b>${yuan(waivedTail())}</b></span>`:''}</div>`:'';
+ $('#main').innerHTML=`<section class="summary"><div class="summary-top"><h2>${isAll?'待收总额':isSelf?'我的分摊':esc(member.name)+'待付'}</h2><span>${state.members.length} 人 · ${state.rounding==='equal-waive-v1'?'均分':state.mode==='aa'?'AA':'百分比'}</span></div><div class="hero-money" aria-live="polite"><small>¥</small>${money(heroValue)}</div>${stats}${ledgerInfo}</section>
  <section class="content-card"><div class="card-bar">${isAll?'<h2 class="total-members-title">分摊汇总</h2>':`<div class="tabs"><button class="${tab==='bills'?'active':''}" data-tab="bills">分摊明细</button><button class="${tab==='records'?'active':''}" data-tab="records">收款记录</button></div>`}<span class="count">${tab==='records'&&!isAll?state.payments.filter(p=>p.member===current).length+' 笔':isAll&&tab==='bills'?state.members.length+' 人':pending.length+' 笔'}</span></div><div id="list"></div><div id="card-footer"></div></section><div id="settled-slot"></div>${isAll?'<div id="total-ledger-detail"></div>':''}`;
  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render();});
  const row=(b,done=false)=>{
@@ -464,6 +473,25 @@ function parsePercent(value){
  const bps=Math.round(Number(s)*100);return bps>=0&&bps<=10000?bps:NaN;
 }
 function evenPercents(count){const base=Math.floor(10000/count),rest=10000-base*count;return Array.from({length:count},(_,i)=>base+(i<rest?1:0));}
+function setEqualDraft(d){
+ d.equalSplit=true;
+ d.members.forEach(m=>m.percent=(Math.floor(10000/d.members.length)/100).toFixed(2));
+}
+function equalAllocations(bills,count){
+ // Balance cents across the whole group, then waive only the group-level tail.
+ let cursor=0;
+ const totals=Array(count).fill(0),target=Math.floor(sum(bills.map(b=>b.amount))/count);
+ const rows=bills.map(b=>{
+  const row=Array(count).fill(Math.floor(b.amount/count));
+  for(let i=0;i<b.amount%count;i++)row[cursor++%count]++;
+  row.forEach((v,i)=>totals[i]+=v);return row;
+ });
+ totals.forEach((v,i)=>{
+  if(v<=target)return;
+  for(let j=rows.length-1;j>=0;j--)if(rows[j][i]>0){rows[j][i]--;break;}
+ });
+ return rows;
+}
 function formatPercent(bps){return (bps/100).toFixed(2).replace(/\.?0+$/,'')+'%';}
 function allocateCents(amount,weights){
  const total=sum(weights),raw=weights.map(w=>amount*w/total),out=raw.map(Math.floor);
@@ -497,14 +525,16 @@ function openHistory(){
 }
 function renderCreate(){
  const d=createDraft,selected=sourceBills.filter(b=>d.selected.has(b.id)),amount=sum(selected.map(b=>b.amount));
+ if(d.equalSplit===undefined)setEqualDraft(d);
  const steps=`<div class="step-indicator"><span class="${d.step===1?'on':''}">01 选账单</span><i></i><span class="${d.step===2?'on':''}">02 设分摊</span><i></i><span class="${d.step===3?'on':''}">03 确认</span></div>`;
  let content='';
  if(d.step===1)content='<p class="source-caption">所有账本 · 最近 '+sourceBills.length+' 条支出</p>'+sourceBills.map(b=>`<label class="bill-select"><input class="check" type="checkbox" data-select="${esc(b.id)}" ${d.selected.has(b.id)?'checked':''}><span class="grow"><b>${esc(b.name)}</b><small>${esc(b.bookName||"")} · ${esc(b.date)} · ${esc(b.category)}</small></span><b>${yuan(b.amount)}</b></label>`).join('')+`<div class="selected-total"><span id="selected-count">已选 ${selected.length} 笔</span><b id="selected-amount">${yuan(amount)}</b></div>`;
  if(d.step===2)content=`<label class="field"><span>分摊名称</span><input id="draft-title" value="${esc(d.title)}" maxlength="30"></label><div class="field"><span>分摊方式</span><div class="pill-tabs"><button data-mode="aa" class="${d.mode==='aa'?'active':''}">AA 平分</button><button data-mode="percent" class="${d.mode==='percent'?'active':''}">百分比分摊</button></div></div><div class="allocation-title"><span>参与人（包含我）</span><button class="button soft small" id="add-member">${icon('plus')} 加一个人</button></div>${d.mode==='percent'?'<div class="percent-toolbar"><span>每人的分摊比例</span><button class="button soft small" id="equal-percent">一键均分比例</button></div>':''}<div id="draft-members">${d.members.map((m,i)=>`<div class="member-input"><input data-name="${i}" value="${esc(m.name)}" aria-label="成员${i+1}姓名" maxlength="16">${d.mode==='percent'?`<div class="percent-input"><input data-percent="${i}" value="${esc(m.percent)}" inputmode="decimal" aria-label="成员${i+1}百分比"><span>%</span></div>`:''}${i>1?`<button class="icon-btn" data-remove="${i}" aria-label="删除成员${i+1}">${icon('close')}</button>`:''}</div>`).join('')}</div>${d.mode==='percent'?'<div id="percent-total" class="percent-total" aria-live="polite"></div>':''}`;
  if(d.step===3){
   const weights=d.members.map(m=>d.mode==='aa'?1:parsePercent(m.percent));
-  const shares=d.members.map((_,i)=>sum(selected.map(b=>allocateCents(b.amount,weights)[i])));
-  content=`<p class="modal-sub">${esc(d.title)} · ${selected.length} 笔 · ${d.mode==='aa'?'AA 平分':'百分比分摊 · 合计 100%'}</p><div class="draft-total">${yuan(amount)}</div>`+d.members.map((m,i)=>`<div class="allocation"><span class="avatar">${esc(m.name.slice(-1))}</span><div>${esc(m.name)}${d.mode==='percent'?'<small class="confirmed-percent">'+formatPercent(weights[i])+'</small>':''}</div><span>${yuan(shares[i])}</span></div>`).join('');
+  const equal=d.mode==='aa'||d.equalSplit,rows=equal?equalAllocations(selected,d.members.length):selected.map(b=>allocateCents(b.amount,weights));
+  const shares=d.members.map((_,i)=>sum(rows.map(row=>row[i]))),waived=amount-sum(shares);
+  content=`<p class="modal-sub">${esc(d.title)} · ${selected.length} 笔 · ${equal?'按人数均分':'百分比分摊 · 合计 100%'}</p><div class="draft-total">${yuan(amount)}</div>${waived?`<p class="modal-sub">尾差减免 ${yuan(waived)}</p>`:''}`+d.members.map((m,i)=>`<div class="allocation"><span class="avatar">${esc(m.name.slice(-1))}</span><div>${esc(m.name)}${d.mode==='percent'?'<small class="confirmed-percent">'+(equal?'1 / '+d.members.length:formatPercent(weights[i]))+'</small>':''}</div><span>${yuan(shares[i])}</span></div>`).join('');
  }
  showModal('create','<div class="create-head">'+modalHead('新建分摊')+steps+'</div><div class="create-body">'+content+`<div class="error" role="alert" id="draft-error"></div></div><div class="modal-foot create-foot"><div class="create-foot-actions"><button class="button outline" id="draft-back">${d.step===1?'取消':'上一步'}</button><button class="button primary" id="draft-next">${d.step===3?'创建分摊单':'下一步 '+icon('arrow')}</button></div></div>`);
  $('#modal').classList.add('create-modal');
@@ -512,18 +542,18 @@ function renderCreate(){
  const capture=()=>{if(d.step!==2)return;d.title=$('#draft-title').value;$('#modal').querySelectorAll('[data-name]').forEach(i=>d.members[+i.dataset.name].name=i.value);$('#modal').querySelectorAll('[data-percent]').forEach(i=>d.members[+i.dataset.percent].percent=i.value);};
  const updatePercent=()=>{
   if(d.step!==2||d.mode!=='percent')return;
-  capture();const vals=d.members.map(m=>parsePercent(m.percent)),valid=vals.every(Number.isFinite),total=valid?sum(vals):NaN,okay=valid&&total===10000;
+  capture();const vals=d.members.map(m=>parsePercent(m.percent)),valid=vals.every(Number.isFinite),total=valid?sum(vals):NaN,okay=d.equalSplit||valid&&total===10000;
   $('#percent-total').classList.toggle('valid',okay);$('#percent-total').classList.toggle('invalid',!okay);
-  $('#percent-total').textContent=!valid?'请输入 0–100 的百分比，最多两位小数':okay?'合计 100%':`合计 ${formatPercent(total)} · ${total<10000?'还差':'超出'} ${formatPercent(Math.abs(10000-total))}`;
+  $('#percent-total').textContent=d.equalSplit?'按人数均分 · 尾差不收':!valid?'请输入 0–100 的百分比，最多两位小数':okay?'合计 100%':`合计 ${formatPercent(total)} · ${total<10000?'还差':'超出'} ${formatPercent(Math.abs(10000-total))}`;
   $('#draft-next').disabled=!okay;$('#draft-error').textContent='';
  };
  if(d.step===1)$('#modal').querySelectorAll('[data-select]').forEach(i=>i.onchange=()=>{i.checked?d.selected.add(i.dataset.select):d.selected.delete(i.dataset.select);$('#selected-count').textContent='已选 '+d.selected.size+' 笔';$('#selected-amount').textContent=yuan(sum(sourceBills.filter(b=>d.selected.has(b.id)).map(b=>b.amount)));});
  if(d.step===2){
   $('#modal').querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{capture();d.mode=b.dataset.mode;renderCreate();});
-  $('#add-member').onclick=()=>{capture();if(d.members.length>=12){$('#draft-error').textContent='最多支持 12 位参与人。';return;}d.members.push({name:'成员 '+(d.members.length+1),percent:'0'});renderCreate();};
-  $('#modal').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{capture();d.members.splice(+b.dataset.remove,1);renderCreate();});
-  $('#equal-percent')?.addEventListener('click',()=>{capture();const vals=evenPercents(d.members.length);d.members.forEach((m,i)=>m.percent=(vals[i]/100).toFixed(2));renderCreate();});
-  $('#modal').querySelectorAll('[data-percent]').forEach(i=>i.oninput=updatePercent);
+  $('#add-member').onclick=()=>{capture();if(d.members.length>=12){$('#draft-error').textContent='最多支持 12 位参与人。';return;}d.members.push({name:'成员 '+(d.members.length+1),percent:'0'});if(d.equalSplit)setEqualDraft(d);renderCreate();};
+  $('#modal').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{capture();d.members.splice(+b.dataset.remove,1);if(d.equalSplit)setEqualDraft(d);renderCreate();});
+  $('#equal-percent')?.addEventListener('click',()=>{capture();setEqualDraft(d);renderCreate();});
+  $('#modal').querySelectorAll('[data-percent]').forEach(i=>i.oninput=()=>{d.equalSplit=false;updatePercent();});
   updatePercent();
  }
  $('#draft-back').onclick=()=>{capture();if(d.step===1)closeModal();else{d.step--;renderCreate();}};
@@ -531,10 +561,10 @@ function renderCreate(){
   capture();let error='';
   if(d.step===1&&!d.selected.size)error='至少选择一笔消费。';
   if(d.step===2&&(!d.title.trim()||d.members.some(m=>!m.name.trim())))error='请填写名称和参与人的名字。';
-  if(d.step===2&&d.mode==='percent'){const vals=d.members.map(m=>parsePercent(m.percent));if(!vals.every(Number.isFinite)||sum(vals)!==10000)error='百分比合计必须为 100%。';}
+  if(d.step===2&&d.mode==='percent'&&!d.equalSplit){const vals=d.members.map(m=>parsePercent(m.percent));if(!vals.every(Number.isFinite)||sum(vals)!==10000)error='百分比合计必须为 100%。';}
   if(error){$('#draft-error').textContent=error;return;}
   if(d.step<3){d.step++;renderCreate();return;}
-  checkpoint();state={version:1,id:crypto.randomUUID?crypto.randomUUID():'group-'+Date.now()+'-'+Math.random().toString(36).slice(2),sourceScope:'all',createdAt:new Date().toISOString(),title:d.title.trim(),mode:d.mode,bills:clone(selected),members:d.members.map((m,i)=>({name:m.name.trim(),id:i?'m'+i:'me',self:i===0,weight:1,percentBps:parsePercent(m.percent)})),payments:[]};current='all';tab='bills';persist();closeModal();render();notify('已创建分摊单',true);
+  checkpoint();state={version:1,id:crypto.randomUUID?crypto.randomUUID():'group-'+Date.now()+'-'+Math.random().toString(36).slice(2),sourceScope:'all',createdAt:new Date().toISOString(),title:d.title.trim(),mode:d.mode,rounding:d.mode==='aa'||d.equalSplit?'equal-waive-v1':null,bills:clone(selected),members:d.members.map((m,i)=>({name:m.name.trim(),id:i?'m'+i:'me',self:i===0,weight:1,percentBps:parsePercent(m.percent)})),payments:[]};current='all';tab='bills';persist();closeModal();render();notify('已创建分摊单',true);
  };
 }
 
@@ -548,7 +578,7 @@ function drawTicketFrame(context,x,y,width,height,edge=22){
 }
 function commonDue(id){return sum(state.bills.map(b=>share(id,b)));}
 function extraDue(id){return sum((state.extras||[]).filter(b=>b.member===id).map(b=>b.amount));}
-function ruleLabel(){if(state.mode==='aa')return state.members.length+' 人 AA';const bps=state.mode==='percent'?state.members.map(m=>m.percentBps):allocateCents(10000,state.members.map(m=>Number(m.weight)));return '百分比分摊 · '+state.members.map((m,i)=>m.name+' '+formatPercent(bps[i])).join(' / ');}
+function ruleLabel(){if(state.rounding==='equal-waive-v1')return state.members.length+' 人均分';if(state.mode==='aa')return state.members.length+' 人 AA';const bps=state.mode==='percent'?state.members.map(m=>m.percentBps):allocateCents(10000,state.members.map(m=>Number(m.weight)));return '百分比分摊 · '+state.members.map((m,i)=>m.name+' '+formatPercent(bps[i])).join(' / ');}
 function totalLedgerHTML(){
  const consumption=(b,independent=false)=>`<article class="ledger-consumption"><div class="ledger-consumption-head"><div><b>${esc(b.name)}</b><small>${esc(b.date)} · ${esc(b.category)}</small></div><strong>${yuan(b.amount)}</strong></div><div class="ledger-shares">${independent?`<span class="share-chip independent">${esc(state.members.find(m=>m.id===b.member)?.name)} <b>${yuan(b.amount)}</b></span>`:state.members.map(m=>`<span class="share-chip">${esc(m.name)} <b>${yuan(share(m.id,b))}</b></span>`).join('')}</div></article>`;
  const extras=state.extras||[];
@@ -565,6 +595,7 @@ function exportLines(scope){
   for(const b of state.bills)lines.push(`${b.name}  ${yuan(b.amount)}`,`  ${b.bookName?b.bookName+" · ":""}${b.date} · ${b.category}`,`  ${state.members.map(m=>m.name+' '+yuan(share(m.id,b))).join('｜')}`);
   lines.push('共同消费合计：'+yuan(sum(state.bills.map(b=>b.amount))));
   if(state.extras?.length){lines.push('',`【个人追加｜${state.extras.length} 笔】`);for(const b of state.extras)lines.push(`${b.name}  ${yuan(b.amount)}`,`  ${b.date}｜仅 ${state.members.find(m=>m.id===b.member).name} 分摊`);lines.push('个人追加合计：'+yuan(sum(state.extras.map(b=>b.amount))));}
+  if(waivedTail())lines.push('尾差减免：'+yuan(waivedTail()));
   lines.push('','合计：'+yuan(total()));
  }else{
   lines.push(member.self?'我的分摊：'+yuan(due(scope)):'待付金额：'+yuan(due(scope)-received(scope)),'应付合计：'+yuan(due(scope)));
@@ -635,7 +666,7 @@ function buildCanvas(scope){
   for(const b of state.bills)item(b);
   if(state.extras?.length){line(y);y+=28;heading('个人追加',state.extras.length+' 笔');for(const b of state.extras)item(b);}
   line(y);y+=32;
-  finance('账单合计',total());finance('已收金额',sum(others().map(m=>received(m.id))));finance('我的分摊',due(state.members.find(m=>m.self).id));finance('待收金额',sum(others().map(m=>due(m.id)-received(m.id))),true);
+  finance('账单合计',total());if(waivedTail())finance('尾差减免',waivedTail());finance('已收金额',sum(others().map(m=>received(m.id))));finance('我的分摊',due(state.members.find(m=>m.self).id));finance('待收金额',sum(others().map(m=>due(m.id)-received(m.id))),true);
  }else{
   const bills=memberBills(scope),pending=member.self?bills:bills.filter(b=>remaining(scope,b)>0),settled=member.self?[]:bills.filter(b=>remaining(scope,b)<=0);
   if(pending.length){heading(member.self?'分摊明细':'未结清',pending.length+' 笔');for(const b of pending)item(b,true);}
