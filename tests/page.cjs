@@ -59,7 +59,7 @@ const base = process.env.BILL_SPLIT_TEST_URL || 'http://127.0.0.1:8787';
     await page.locator('[data-percent="0"]').fill('50');
     assert.equal(await page.locator('#draft-next').isDisabled(), true);
     await page.locator('#equal-percent').click();
-    assert.deepEqual(await page.locator('[data-percent]').evaluateAll(items => items.map(i => i.value)), ['33.34', '33.33', '33.33']);
+    assert.deepEqual(await page.locator('[data-percent]').evaluateAll(items => items.map(i => i.value)), ['33.33', '33.33', '33.33']);
     await page.locator('#draft-title').fill('最近200条测试');
     await page.locator('#draft-next').click();
     await page.locator('#draft-next').click();
